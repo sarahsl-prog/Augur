@@ -60,6 +60,19 @@ Both must share one alert schema; ground truth labels travel with the alert thro
 
 None yet — no source code, package manifest, or tooling exists. Once the ADK skeleton lands (build order step 1), update this section with the actual commands.
 
+## Harness: Augur
+
+**Goal:** Keep Augur build work aligned to hackathon-track invariants (Vertex/ADK/Phoenix), the FP≠BP taxonomy, and the demo north star.
+
+**Trigger:** For any work touching alerts, triage, MITRE/ATT&CK, dispositions, Phoenix tracing, MCP, ADK, Vertex, Cloud Run, Firestore, the eval/improvement agents, or the demo arc — use the `augur` skill. It dispatches to the right domain skill (`augur-mitre-taxonomy`, `augur-adk-patterns`, `augur-phoenix-loop`) and enforces hard invariants. Simple Q&A doesn't need it.
+
+For periodic invariant sweeps (pre-commit, pre-submission), invoke the `augur-build-verifier` sub-agent.
+
+**Change log:**
+| Date | Change | Target | Reason |
+|------|--------|--------|--------|
+| 2026-05-08 | Initial construction | `.claude/skills/augur/`, `.claude/skills/augur-mitre-taxonomy/`, `.claude/skills/augur-adk-patterns/`, `.claude/skills/augur-phoenix-loop/`, `.claude/agents/augur-build-verifier.md` | First harness for the project — orchestrator + 3 domain skills + verifier sub-agent |
+
 ## Demo North Star
 
 The ~3-minute demo video shows: baseline prompts struggle on Lateral Movement → eval flags the cluster → improvement agent rewrites that tactic's prompt → same batch reruns with measurably better precision/recall → Phoenix trace diff between v1 and v2 prompt on an identical alert. When making trade-off calls, prefer work that strengthens this narrative over peripheral polish.

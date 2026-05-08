@@ -1,6 +1,8 @@
 # Harness / plugin local state
 .remember/
-.claude/
+
+# Claude Code: track project agents/skills/commands, ignore user-local settings
+.claude/settings.local.json
 
 # Python
 __pycache__/
