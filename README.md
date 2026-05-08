@@ -1,6 +1,7 @@
 # Project Brief: Self-Improving Security Triage Agent
 ## Google Cloud Rapid Agent Hackathon — Arize Track
 ## Deadline: June 11, 2026
+<img width="1024" height="1024" alt="auger_eagle_standing_on_a_glowing_circuit" src="auger.jpg" />
 
 ---
 Augur — a security triage agent that reads its own traces to improve its foresight.
