@@ -1,7 +1,5 @@
 """Shared pytest fixtures for the Augur test suite."""
 
-import os
-
 import pytest
 
 
