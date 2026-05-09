@@ -1,0 +1,28 @@
+.git/
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Don't ship test code or fixtures
+tests/
+
+# Don't ship raw or processed datasets — too large
+data/
+
+# Don't ship Claude harness or docs
+.claude/
+docs/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Env
+.env
+.env.*
+!.env.example
