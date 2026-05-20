@@ -1,0 +1,31 @@
+# Cloud Build configuration — builds two images: runtime (FastAPI) and dashboard (Streamlit)
+# Deploy with: gcloud builds submit --config cloudbuild.yaml
+# Note: $SHORT_SHA is not defined for manual `gcloud builds submit`; we only tag :latest.
+
+steps:
+  # --- Build runtime image ---
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-runtime'
+    args:
+      - build
+      - '-t'
+      - 'us-central1-docker.pkg.dev/augur-495810/augur/runtime:latest'
+      - '-f'
+      - 'Dockerfile'
+      - '.'
+
+  # --- Build dashboard image ---
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-dashboard'
+    waitFor: ['-']
+    args:
+      - build
+      - '-t'
+      - 'us-central1-docker.pkg.dev/augur-495810/augur/dashboard:latest'
+      - '-f'
+      - 'Dockerfile.dashboard'
+      - '.'
+
+images:
+  - 'us-central1-docker.pkg.dev/augur-495810/augur/runtime:latest'
+  - 'us-central1-docker.pkg.dev/augur-495810/augur/dashboard:latest'
