@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 
 from google.adk.agents import Agent
 from google.adk.models import Gemini
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.genai.types import Content, Part
+from google.genai.types import Content, Part, GenerateContentConfig
+from google.genai import Client
 
 from augur.data.enums import Disposition, Tactic
 from augur.data.schema import Alert, TriageOutput
@@ -51,11 +49,7 @@ class VertexGemini(Gemini):
 
 
 def build_triage_agent() -> Agent:
-    """Return an ADK agent configured with the v1 hardcoded triage prompt.
-
-    The agent receives a JSON-serialized Alert and must respond with JSON
-    matching TriageOutput (minus trace_id, which is injected externally).
-    """
+    """Return an ADK agent configured with the v1 hardcoded triage prompt."""
     return Agent(
         name="augur_triage_v1",
         model=VertexGemini(model="gemini-2.5-flash"),
@@ -64,73 +58,57 @@ def build_triage_agent() -> Agent:
     )
 
 
-def _parse_agent_response(raw: str) -> dict:
-    """Extract JSON from an ADK agent response that may contain markdown or prose."""
-    text = raw.strip()
-    if not text:
-        raise ValueError("Agent returned empty response — no text to parse.")
-
-    # Strip markdown fences if present
-    if text.startswith("```json"):
-        text = text.removeprefix("```json").strip()
-    elif text.startswith("```"):
-        text = text.removeprefix("```").strip()
-    if text.endswith("```"):
-        text = text.removesuffix("```").strip()
-
-    # If there's stray prose, try to extract the first JSON object
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        import re
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        raise ValueError(f"No JSON object found in response. Raw text:\n{text[:500]}")
+# JSON schema that Gemini will be forced to emit (native JSON mode)
+_TRIAGE_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "disposition": {"type": "STRING", "enum": ["True Positive - Critical", "True Positive - Policy Violation", "False Positive", "Benign Positive", "Needs Investigation"]},
+        "attack_tactic": {"type": "STRING", "enum": ["Initial Access", "Credential Access", "Lateral Movement", "Exfiltration", "Command & Control", "Defense Evasion"]},
+        "attack_technique": {"type": "STRING"},
+        "attack_technique_name": {"type": "STRING"},
+        "confidence": {"type": "NUMBER"},
+        "severity": {"type": "STRING", "enum": ["Low", "Medium", "High", "Critical"]},
+        "recommended_action": {"type": "STRING"},
+        "reasoning": {"type": "STRING"},
+    },
+    "required": ["disposition", "severity", "confidence", "recommended_action", "reasoning"],
+}
 
 
 async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
-    """Run the triage agent against a single alert.
+    """Run the triage agent against a single alert using Gemini native JSON mode.
 
     Returns a validated TriageOutput. The caller is responsible for injecting
     trace_id from the current Phoenix span.
     """
     alert_json = alert.model_dump_json()
 
-    # ADK runner setup — session service is in-memory for stateless triage
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        session_service=session_service,
-        app_name="augur",
-        auto_create_session=True,
+    client = Client(
+        vertexai=True,
+        project="augur-495810",
+        location="us-central1",
     )
 
-    msg = Content(role="user", parts=[Part(text=alert_json)])
+    config = GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=_TRIAGE_RESPONSE_SCHEMA,
+    )
 
-    response_parts = ""
-    async for event in runner.run_async(
-        user_id="augur_triage",
-        session_id=alert.alert_id.hex,
-        new_message=msg,
-    ):
-        if (
-            hasattr(event, "content")
-            and event.content
-            and event.content.parts
-        ):
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    response_parts += part.text
+    response = await client.aio.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=Content(
+            role="user",
+            parts=[Part(text=f"{_PROMPT_TEXT}\n\nAlert JSON:\n{alert_json}")],
+        ),
+        config=config,
+    )
 
-    response_text = response_parts.strip()
+    raw_text = response.text.strip() if response.text else ""
+    if not raw_text:
+        raise RuntimeError("Gemini returned empty response")
 
-    if not response_text:
-        raise RuntimeError("ADK agent returned no text response")
+    data = json.loads(raw_text)
 
-    data = _parse_agent_response(response_text)
-
-    # Map the raw JSON into TriageOutput; alert_id is injected from the original alert
     output = TriageOutput(
         alert_id=alert.alert_id,
         disposition=Disposition(data["disposition"]),
@@ -141,6 +119,32 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
         severity=data["severity"],
         recommended_action=data.get("recommended_action", ""),
         reasoning=data.get("reasoning", ""),
-        trace_id="",  # injected by caller from Phoenix span
+        trace_id="",
     )
     return output
+
+
+def _parse_agent_response(raw: str) -> dict:
+    """Extract JSON from a response that may contain markdown or prose.
+
+    Kept for test compatibility and fallback parsing.
+    """
+    text = raw.strip()
+    if not text:
+        raise ValueError("Agent returned empty response — no text to parse.")
+
+    if text.startswith("```json"):
+        text = text.removeprefix("```json").strip()
+    elif text.startswith("```"):
+        text = text.removeprefix("```").strip()
+    if text.endswith("```"):
+        text = text.removesuffix("```").strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        import re
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise ValueError(f"No JSON object found in response. Raw text:\n{text[:500]}")
