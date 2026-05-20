@@ -15,7 +15,7 @@ WORKDIR /app
 # Install uv, then sync deps (better caching: deps before code)
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen
 
 # Copy source last so dep layer stays cached on code changes
 COPY src/ ./src/
@@ -25,4 +25,4 @@ ENV PORT=8080
 EXPOSE 8080
 
 # Cloud Run requires binding to $PORT
-CMD ["uv", "run", "--no-dev", "uvicorn", "augur.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "uv run --no-dev uvicorn augur.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

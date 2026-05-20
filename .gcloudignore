@@ -11,7 +11,7 @@ __pycache__/
 tests/
 
 # Don't ship raw or processed datasets — too large
-data/
+# data/ (anchored below)
 
 # Don't ship Claude harness or docs
 .claude/
@@ -26,3 +26,8 @@ docs/
 .env
 .env.*
 !.env.example
+
+# Keep source code data module
+!/src/augur/data/
+# Only ignore root-level data dir
+/data/

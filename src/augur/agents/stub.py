@@ -16,7 +16,7 @@ def build_stub_agent() -> Agent:
     """
     return Agent(
         name="augur_stub",
-        model="gemini-1.5-pro-002",
+        model="gemini-2.5-flash",
         description="Smoke-test agent — echoes input.",
         instruction="You are a smoke-test agent. Echo the user input verbatim.",
     )

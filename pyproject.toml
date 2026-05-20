@@ -6,12 +6,15 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "google-adk>=0.4.0",
     "google-cloud-aiplatform>=1.71.0",
+    "google-cloud-firestore>=2.19.0",
     "openinference-instrumentation-google-adk>=0.1.0",
     "arize-phoenix-otel>=0.7.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.9.0",
     "pandas>=2.2.0",
+    "streamlit>=1.39.0",
+    "altair>=5.4.0",
 ]
 
 [dependency-groups]
