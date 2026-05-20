@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from google.adk.agents import Agent
+from google.adk.models import Gemini
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai.types import Content, Part
@@ -25,6 +27,29 @@ _PROMPT_PATH = Path(__file__).parents[2] / "prompts" / "triage_v1.md"
 _PROMPT_TEXT = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.exists() else ""
 
 
+class VertexGemini(Gemini):
+    """Gemini model configured for Vertex AI backend (hackathon requirement)."""
+
+    @property
+    def api_client(self):
+        """Override to force Vertex AI backend with project/location."""
+        from google.genai import Client
+        return Client(
+            vertexai=True,
+            project="augur-495810",
+            location="us-central1",
+        )
+
+    @property
+    def _live_api_client(self):
+        from google.genai import Client
+        return Client(
+            vertexai=True,
+            project="augur-495810",
+            location="us-central1",
+        )
+
+
 def build_triage_agent() -> Agent:
     """Return an ADK agent configured with the v1 hardcoded triage prompt.
 
@@ -33,15 +58,18 @@ def build_triage_agent() -> Agent:
     """
     return Agent(
         name="augur_triage_v1",
-        model="gemini-1.5-pro-002",
+        model=VertexGemini(model="gemini-2.5-flash"),
         description="Security alert triage — single hardcoded prompt.",
         instruction=_PROMPT_TEXT,
     )
 
 
 def _parse_agent_response(raw: str) -> dict:
-    """Extract JSON from an ADK agent response that may contain markdown."""
+    """Extract JSON from an ADK agent response that may contain markdown or prose."""
     text = raw.strip()
+    if not text:
+        raise ValueError("Agent returned empty response — no text to parse.")
+
     # Strip markdown fences if present
     if text.startswith("```json"):
         text = text.removeprefix("```json").strip()
@@ -49,7 +77,16 @@ def _parse_agent_response(raw: str) -> dict:
         text = text.removeprefix("```").strip()
     if text.endswith("```"):
         text = text.removesuffix("```").strip()
-    return json.loads(text)
+
+    # If there's stray prose, try to extract the first JSON object
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        import re
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise ValueError(f"No JSON object found in response. Raw text:\n{text[:500]}")
 
 
 async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
@@ -71,7 +108,7 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
 
     msg = Content(role="user", parts=[Part(text=alert_json)])
 
-    response_text = ""
+    response_parts = ""
     async for event in runner.run_async(
         user_id="augur_triage",
         session_id=alert.alert_id.hex,
@@ -84,7 +121,9 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
         ):
             for part in event.content.parts:
                 if hasattr(part, "text") and part.text:
-                    response_text = part.text
+                    response_parts += part.text
+
+    response_text = response_parts.strip()
 
     if not response_text:
         raise RuntimeError("ADK agent returned no text response")
