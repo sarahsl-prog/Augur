@@ -49,12 +49,23 @@ class VertexGemini(Gemini):
 
 
 def build_triage_agent() -> Agent:
-    """Return an ADK agent configured with the v1 hardcoded triage prompt."""
+    """Return an ADK agent configured with the current prompt from Firestore.
+
+    Reads the prompt for tactic "Initial Access" as the v1 unified prompt.
+    Falls back to the local triage_v1.md if Firestore is unreachable.
+    """
+    try:
+        from augur.prompt_store import PromptStore
+        prompt_text = PromptStore().get_prompt(Tactic.INITIAL_ACCESS)
+    except Exception:
+        prompt_text = ""
+    if not prompt_text:
+        prompt_text = _PROMPT_TEXT
     return Agent(
         name="augur_triage_v1",
         model=VertexGemini(model="gemini-2.5-flash"),
-        description="Security alert triage — single hardcoded prompt.",
-        instruction=_PROMPT_TEXT,
+        description="Security alert triage — reads prompt from Firestore store.",
+        instruction=prompt_text,
     )
 
 
