@@ -16,6 +16,33 @@ from augur.prompt_store import PromptStore
 from augur.data.schema import Alert, TriageOutput
 from augur.tracing import init_tracing
 
+from datetime import datetime, timezone
+from google.cloud import firestore
+
+def _persist_eval(eval_result, project="augur-495810"):
+    """Write an EvalResult to Firestore eval_results collection."""
+    db = firestore.Client(project=project)
+    doc = db.collection("eval_results").document(eval_result.eval_run_id)
+    per_tactic = {}
+    for k, v in eval_result.per_tactic.items():
+        per_tactic[k] = {
+            "n_total": v.n_total,
+            "n_correct": v.n_correct,
+            "precision": v.precision,
+            "recall": v.recall,
+            "f1": v.f1,
+            "accuracy": v.accuracy,
+            "failure_trace_ids": v.failure_trace_ids,
+        }
+    doc.set({
+        "eval_run_id": eval_result.eval_run_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "batch_size": eval_result.batch_size,
+        "per_tactic": per_tactic,
+        "flagged_tactic": eval_result.flagged_tactic.value if eval_result.flagged_tactic else None,
+    })
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -87,6 +114,7 @@ async def batch(req: BatchRequest) -> BatchResponse:
         ground_truths=ground_truths,
         eval_run_id=str(uuid.uuid4()),
     )
+    _persist_eval(eval_result)
 
     improved = False
     if req.improve and eval_result.flagged_tactic is not None:
