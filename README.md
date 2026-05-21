@@ -1,250 +1,299 @@
-# Project Brief: Self-Improving Security Triage Agent
-## Google Cloud Rapid Agent Hackathon — Arize Track
-## Deadline: June 11, 2026
+# Augur
+
+Self-improving security alert triage agent.
+
+Google Cloud Rapid Agent Hackathon — Arize Track | Deadline: June 11, 2026
+
 <img width="1024" height="1024" alt="auger_eagle_standing_on_a_glowing_circuit" src="auger.jpg" />
 
 ---
-Augur — a security triage agent that reads its own traces to improve its foresight.
 
-## Concept Summary
+## What It Does
 
-Build a security alert triage agent that:
-1. Ingests security alerts and classifies them using MITRE ATT&CK taxonomy
-2. Generates structured triage reports with disposition, severity, and recommended action
-3. Is fully instrumented with OpenTelemetry tracing via Arize Phoenix
-4. Uses the Phoenix MCP server to query its own traces at runtime
-5. Runs an autonomous self-improvement loop: identifies where it miscategorizes
-   alerts and rewrites its own prompts to fix those patterns
-6. Demonstrates measurable improvement in precision/recall over iterations
+Augur ingests security alerts and classifies them using MITRE ATT&CK taxonomy, then
+uses its own traces to get better:
 
-The self-improvement loop is the core differentiator. Most submissions will bolt
-on tracing as an afterthought. This one makes the traces *functional* — the
-agent reads its own operational history and gets better from it.
+1. **Triage Agent** — classifies each alert (disposition + tactic + technique)
+2. **Phoenix Tracing** — every call is auto-traced into Arize Phoenix Cloud
+3. **Eval Agent** — queries Phoenix via the MCP server to score predictions against
+   ground truth per-tactic
+4. **Improvement Agent** — fetches failed traces from Phoenix via MCP, builds a
+   meta-prompt, and rewrites the per-tactic system prompt
+5. The triage agent loads the updated prompt for the next batch
 
----
-
-## Hackathon Track: Arize
-
-- Prize bucket: $5k / $3k / $2k (1st/2nd/3rd), competing only within Arize track
-- Judging: Technical implementation, meaningful tracing + MCP use, quality of
-  self-improvement loop, overall impact
-- Hard requirement: Code-owned agent runtime (Gemini CLI, Google ADK, Cloud Run).
-  Visual Agent Builder alone is NOT supported for tracing.
+**The differentiator:** The traces aren't decorative. The eval and improvement agents
+*read operational history from Phoenix* instead of comparing local dicts. That is the
+MCP integration the Arize track judges.
 
 ---
 
 ## Tech Stack
 
-| Layer           | Technology                                | Notes                        |
-|-----------------|-------------------------------------------|------------------------------|
-| Agent Runtime   | Google ADK                                | Required for Arize; GCP-native |
-| LLM             | Gemini (via Vertex AI)                    | Required by hackathon        |
-| Hosting         | Cloud Run                                 | GCP hands-on for cert work   |
-| Tracing         | Arize Phoenix Cloud (free tier)           | OpenInference instrumentation |
-| MCP Server      | @arizeai/phoenix-mcp via npx              | Agent queries its own traces  |
-| Instrumentor    | openinference-instrumentation-google-adk  | Auto-instruments ADK agents  |
-| Prompt Store    | Firestore (preferred)                     | Versioned prompts per tactic  |
-| Language        | Python                                    | Primary dev language          |
-
-Key links:
-- Phoenix Cloud:    https://app.phoenix.arize.com
-- Phoenix GitHub:   https://github.com/Arize-ai/phoenix
-- Phoenix MCP docs: https://arize.com/docs/phoenix/integrations/phoenix-mcp-server
-- pip install openinference-instrumentation-google-adk
+| Layer | Technology | Notes |
+|---|---|---|
+| Agent runtime | Python 3.12, FastAPI, uvicorn | Not using ADK Runner; direct Vertex API calls with manual OTel spans |
+| LLM | Gemini via Vertex AI | project `augur-495810`, region `us-central1` |
+| Hosting | Cloud Run | GCP-native, binds to `$PORT` |
+| Tracing | Arize Phoenix Cloud | `https://app.phoenix.arize.com` |
+| MCP Server | `@arizeai/phoenix-mcp` via npx | Used by eval + improvement agents |
+| Instrumentor | `openinference-instrumentation-google-adk` | Auto-instruments ADK Runner (we add manual spans for direct API calls) |
+| Prompt Store | Google Firestore | Versioned prompts per tactic |
+| Data | CICIDS2017/2018 + synthetic | CICIDS parsed by `mitre_mapping.py`; synthetic generator for dev/test |
 
 ---
 
-## Alert Taxonomy: Two-Layer System
+## Quick Start (Local)
 
-### Layer 1: Disposition (agent output per alert)
+### Prerequisites
 
-| Disposition                    | Description                                         |
-|--------------------------------|-----------------------------------------------------|
-| True Positive - Critical       | Real threat, immediate IR required                  |
-| True Positive - Policy Violation | Real but not emergency, needs remediation         |
-| False Positive                 | Bad detection logic or data; pure noise to tune out |
-| Benign Positive                | Legitimate activity that triggered the rule         |
-| Needs Investigation            | Ambiguous; escalate to senior analyst               |
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- Google Cloud SDK (for deploy)
+- Vertex AI + Firestore access (service account key or ADC)
+- Phoenix Cloud API key (free tier)
+- Node.js (for the MCP server; already in Docker)
 
-IMPORTANT: False Positive != Benign Positive. This distinction signals domain
-expertise to judges. A sysadmin running a legit tool is Benign Positive.
-Bad detection logic firing on normal traffic is False Positive.
+### Environment Variables
 
-### Layer 2: MITRE ATT&CK Tactic (scoped subset for hackathon)
+Create `.env` or export manually:
 
-| Tactic             | Example Technique          | Why Included                          |
-|--------------------|---------------------------|---------------------------------------|
-| Initial Access     | T1190 Exploit Public App   | Clear signal in network logs          |
-| Credential Access  | T1110 Brute Force          | CICIDS has great coverage             |
-| Lateral Movement   | T1021 Remote Services      | Common FP/TP confusion; ideal for demo |
-| Exfiltration       | T1041 C2 Channel           | Measurable in flow data               |
-| Command & Control  | T1071 App Layer Protocol   | Benign positive noise; interesting eval |
-| Defense Evasion    | T1036 Masquerading         | Tricky; good for showing improvement  |
+```bash
+export PHOENIX_API_KEY="your-phoenix-api-key"          # Required for tracing
+export AUGUR_TRACING_DISABLED="0"                       # Set "1" to skip OTel in tests
+export GOOGLE_CLOUD_PROJECT="augur-495810"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+```
 
-### Structured Agent Output Per Alert
+### Install & Test
 
+```bash
+git clone https://github.com/sarahsl-prog/Augur.git
+cd Augur
+
+# uv handles virtual env + editable install automatically
+uv sync
+
+# Run the test suite (33 tests, ~5s)
+uv run pytest -q
+
+# Start the API locally
+uv run uvicorn augur.main:app --host 0.0.0.0 --port 8080
+```
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | `GET` | Liveness check |
+| `/` | `GET` | Service info |
+| `/triage` | `POST` | Classify a single `Alert` → `TriageOutput` |
+| `/batch` | `POST` | Generate alerts, triage, eval, optionally improve |
+
+### `/batch` MCP Toggle
+
+The closed-loop `/batch` endpoint runs the legacy inline eval by default. To use
+Phoenix MCP-backed eval and improvement (the Arize-track path), set
+`use_phoenix_mcp: true` in the request:
+
+```bash
+curl -X POST http://localhost:8080/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "n": 25,
+    "eval_every": 25,
+    "improve": true,
+    "use_phoenix_mcp": true
+  }'
+```
+
+Response example:
+
+```json
 {
-  "alert_id": "uuid",
-  "disposition": "True Positive - Critical",
-  "attack_tactic": "Lateral Movement",
-  "attack_technique": "T1021.002",
-  "attack_technique_name": "SMB/Windows Admin Shares",
-  "confidence": 0.87,
-  "severity": "High",
-  "recommended_action": "Isolate host, escalate to IR",
-  "reasoning": "...",
-  "trace_id": "phoenix_trace_id"
+  "triaged": 25,
+  "eval_run_id": "eval-abc-123",
+  "flagged_tactic": "Lateral Movement",
+  "improved": true,
+  "mcp_enabled": true
 }
+```
 
 ---
 
-## Data Pipeline: Hybrid Approach
+## Key Modules
 
-Sources:
-- CICIDS2017/2018: Public labeled network intrusion dataset. Ground truth labels,
-  realistic attack patterns. Covers brute force, DoS, infiltration, botnet,
-  web attacks. Download: https://www.unb.ca/cic/datasets/ids-2017.html
-  https://www.yorku.ca/research/bccc/ucs-technical/cybersecurity-datasets-cds/
-  
-- Synthetic alerts: Python scripts generating alert-shaped data mapped to CICIDS
-  categories. Controlled volume, edge case injection, reproducible failure patterns
-  for demo purposes.
-
-Pipeline:
-1. Preprocess CICIDS: extract features, normalize to alert schema
-2. Synthetic generator produces alerts in same schema, same label distribution
-3. Labels stored with alerts as ground truth for eval
-4. Eval agent compares triage output vs ground truth: per-tactic precision/recall
-5. Results stored in Prompt Store with trace IDs for Phoenix correlation
-
-Why hybrid: CICIDS = credibility. Synthetic = control over demo failure patterns.
+| Module | Purpose |
+|---|---|
+| `src/augur/agents/triage.py` | Builds + runs triage agent; injects manual OTel span with `trace_id` into `TriageOutput` |
+| `src/augur/phoenix_mcp_client.py` | Async context manager wrapping `@arizeai/phoenix-mcp` stdio server |
+| `src/augur/eval_phoenix.py` | MCP-based eval: pulls traces from Phoenix, computes per-tactic precision/recall |
+| `src/augur/improvement_phoenix.py` | MCP-based improvement: pulls failed trace content from Phoenix, rewrites prompt |
+| `src/augur/data/mitre_mapping.py` | CICIDS attack label → Augur tactic/technique/disposition mapping |
+| `src/augur/data/cicids_loader.py` | `load_cicids_csv(path)` → `list[tuple[Alert, GroundTruth]]` |
+| `src/augur/data/splits.py` | Tactic-stratified train/dev/test split |
+| `src/augur/tracing.py` | `init_tracing()` + `trace_span()` context manager for manual spans |
 
 ---
 
-## Architecture: The Core Self-Improvement Loop
+## Build Order
 
+Current branch: `implement-mcp-tests` (ahead of `main`)
+
+| # | Status | Task |
+|---|---|---|
+| 1 | ✅ | Project skeleton + Cloud Run config + Firestore prompt store |
+| 2 | ✅ | OpenInference ADK instrumentation → Phoenix Cloud |
+| 3 | ✅ | Alert schema + synthetic data generator |
+| 4 | ✅ | CICIDS preprocessing: `mitre_mapping.py`, `cicids_loader.py`, `splits.py` |
+| 5 | ✅ | Basic triage agent working end-to-end + traces in Phoenix |
+| 6 | ✅ | Prompt Store in Firestore with versioned prompts per tactic |
+| 7 | ✅ | Eval agent wired to Phoenix MCP |
+| 8 | ✅ | Improvement agent with prompt rewrite logic + MCP |
+| 9 | ✅ | Wire MCP eval + improvement into `/batch` endpoint |
+| 10 | ⬜ | Deploy to Cloud Run (`implement-mcp-tests` branch) |
+| 11 | ⬜ | Record demo video |
+
+---
+
+## Deploy to Cloud Run
+
+### 1. Set up Artifact Registry repository (once)
+
+```bash
+gcloud artifacts repositories create augur \
+  --repository-format=docker \
+  --location=us-central1 \
+  --project=augur-495810
+```
+
+### 2. Build + push with Cloud Build
+
+```bash
+cd Augur
+gcloud builds submit --config cloudbuild.yaml --project=augur-495810
+```
+
+### 3. Deploy runtime service
+
+```bash
+gcloud run deploy augur-runtime \
+  --image=us-central1-docker.pkg.dev/augur-495810/augur/runtime:latest \
+  --region=us-central1 \
+  --project=augur-495810 \
+  --platform=managed \
+  --allow-unauthenticated \
+  --set-env-vars="PHOENIX_API_KEY=${PHOENIX_API_KEY}" \
+  --max-instances=10 \
+  --memory=1Gi \
+  --cpu=1 \
+  --timeout=300s \
+  --port=8080
+```
+
+### 4. Deploy dashboard (optional)
+
+```bash
+gcloud run deploy augur-dashboard \
+  --image=us-central1-docker.pkg.dev/augur-495810/augur/dashboard:latest \
+  --region=us-central1 \
+  --project=augur-495810 \
+  --platform=managed \
+  --allow-unauthenticated \
+  --max-instances=1 \
+  --memory=512Mi
+```
+
+---
+
+## Alert Taxonomy
+
+### Disposition Layer (what the agent decides)
+
+| Disposition | Description |
+|---|---|
+| True Positive - Critical | Real threat, immediate response required |
+| True Positive - Policy Violation | Real but not emergent; needs remediation |
+| False Positive | Bad detection logic or data; noise to tune out |
+| Benign Positive | Legitimate activity that triggered the rule |
+| Needs Investigation | Ambiguous; escalate to senior analyst |
+
+### MITRE ATT&CK Tactics (v1 scope)
+
+| Tactic | Example Technique | Coverage |
+|---|---|---|
+| Initial Access | T1190 Exploit Public-Facing Application | CICIDS Web Attack labels |
+| Credential Access | T1110 Brute Force | CICIDS FTP-Patator, SSH-Patator |
+| Lateral Movement | T1021 Remote Services | CICIDS Infiltration |
+| Command & Control | T1071 App Layer Protocol | CICIDS Bot |
+| Exfiltration | T1041 C2 Channel | Synthetic (CICIDS2017 lacks explicit label) |
+| Defense Evasion | T1036 Masquerading | Synthetic (CICIDS2017 lacks explicit label) |
+
+---
+
+## Data Pipeline
+
+CICIDS2017 is ~100 GB; we work with downloaded subsets. Use the fixture under
+`tests/data/fixtures/cicids_sample.csv` for unit tests.
+
+The pipeline:
+
+1. Download CICIDS subset CSVs → `data/raw/`
+2. `load_cicids_csv(path)` parses + maps labels via `mitre_mapping.py`
+3. `split_pairs(pairs)` → stratified train/dev/test
+4. Test set is held out; never used for prompt tuning per spec D4
+
+---
+
+## Architecture: Self-Improvement Loop
+
+```
 [Alert Stream]
       |
       v
-[Triage Agent]
-  - Loads current prompt from Prompt Store (per ATT&CK tactic)
-  - Classifies alert: disposition + tactic/technique
-  - Generates structured triage report
+[Triage Agent] ← per-tactic prompt version from Firestore
       |
       v
-[Phoenix Tracing] <-- OpenInference auto-instrumentation
-  - Every LLM call, tool use, decision traced
-  - Trace linked to alert_id and ground truth label
+[Manual OTel span]
+  - augur.disposition, augur.attack_tactic, etc.
+  - trace_id injected into TriageOutput
+  |  (exported to Phoenix Cloud)
+      v
+[Batch Eval — every N alerts]
+  Legacy path: inline dict comparison
+  MCP path:   query Phoenix traces via MCP, match by trace_id/alert_id
       |
       v
-[Eval Agent] (triggers every N alerts — recommend N=25)
-  - Pulls traces from Phoenix via MCP server
-  - Compares dispositions vs ground truth labels
-  - Computes precision/recall per ATT&CK tactic
-  - Identifies worst-performing tactic clusters
-      |
-      v
-[Improvement Agent]
-  - Queries Phoenix MCP for failed trace examples
-  - Pulls current prompt for failing tactic from Prompt Store
-  - Uses failed traces as negative examples in context
-  - Rewrites prompt for that tactic
-  - Stores new prompt version in Prompt Store
-      |
-      v
-[Triage Agent loads updated prompt on next alert]
-      |
-    (loop)
-
-What actually changes — implementation priority order:
-1. Prompt Store rewrite (build first): versioned system prompts per ATT&CK tactic
-   in Firestore. Improvement Agent rewrites failing tactic prompts using its own
-   failed traces as context.
-2. Few-shot example store (build second): agent adds failure cases as negative
-   few-shot examples into retrieval. Powerful, not hard to add once #1 works.
+[Flagged tactic?]
+  └─yes→ [Improvement Agent]
+         Legacy path: local failed_traces dicts
+         MCP path:   fetch trace content from Phoenix via MCP,
+                     extract reasoning, rewrite prompt
+           |
+           v
+        [Firestore: new prompt version written]
+           |
+           v
+  [Triage Agent loads updated prompt on next alert]
+```
 
 ---
 
-## Demo Strategy: "Day in the Life" Narrative (~3 min video)
+## Submission Checklist (June 11, 2026 @ 2:00 PM PDT)
 
-Framing: SOC analyst turns on the agent Monday morning.
-
-Arc:
-1. Agent starts with baseline prompts, run against 50 labeled alerts
-2. Show it struggling: consistently miscalling Lateral Movement as False Positive.
-   Phoenix traces show the reasoning chain.
-3. Eval loop fires (25-alert threshold): identifies Lateral Movement failure cluster
-4. Improvement Agent rewrites Lateral Movement prompt using failed trace examples
-5. Run same alert batch: show improved precision/recall numbers
-6. Phoenix dashboard: trace diff between v1 and v2 prompt, same alert, diff outcome
-
-Key metrics to show on screen:
-- Per-tactic precision/recall before/after improvement loop
-- False positive rate by severity:
-    Critical < 25% | High < 50% | Medium < 75% (industry benchmarks)
-- Prompt version history in Prompt Store
-- Phoenix trace comparison: v1 vs v2 prompt on identical alert
+- [ ] Hosted project URL (Cloud Run)
+- [ ] Public GitHub repo with open source license
+- [ ] ~3 minute demo video
+- [ ] Arize track selected on Devpost
+- [ ] Completed Devpost submission form
 
 ---
 
-## GCP Cert Alignment
+## License
 
-Hands-on experience with:
-- Vertex AI / Gemini API
-- Google ADK (Agent Development Kit)
-- Cloud Run deployment
-- Firestore (managed NoSQL)
-- IAM and service accounts
-- Cloud Build (optional CI/CD for prompt updates)
+This project is open source under the MIT License (see `LICENSE`).
 
----
+## Links
 
-## Open Decisions (Resolve Early)
-
-1. Prompt Store backend: Firestore (recommended — simpler, GCP-native, NoSQL)
-   vs. Cloud SQL Postgres (more familiar but more setup)
-
-2. Eval trigger: alert-count-based at N=25 (recommended for demo clarity)
-   vs. time-based vs. manual
-
-3. Phoenix hosting: Cloud free tier (recommended for hackathon — zero setup)
-   vs. self-hosted on Cloud Run
-
-4. Ground truth: pre-labeled CICIDS subset (recommended — reproducible)
-   vs. live human feedback endpoint (impressive but complex)
-
-
----
-
-
-## Suggested Build Order
-
-Work in this order. Do not skip ahead.
-
- 1. Set up Google ADK project skeleton with Cloud Run config
- 2. Install OpenInference ADK instrumentation, verify traces in Phoenix Cloud
- 3. Build alert schema + synthetic data generator
- 4. Download + preprocess CICIDS2017 subset (start: Brute Force + Lateral Movement)
- 5. Build basic triage agent, single hardcoded prompt, no self-improvement.
-    Get end-to-end working and traces flowing into Phoenix.
- 6. Add Prompt Store in Firestore with versioned prompts per tactic
- 7. Build eval agent wired to Phoenix MCP
- 8. Build improvement agent with prompt rewrite logic
- 9. Wire all three agents together, run improvement loop end-to-end
-10. Build demo dashboard/UI for the video
-11. Deploy to Cloud Run
-12. Record demo video
-
-CRITICAL: Do not start step 6 until step 5 works. The self-improvement loop
-is worthless if the base agent is broken. Get traces flowing first.
-
----
-
-## Submission Checklist (June 11, 2026 @ 2pm PDT)
-
-[ ] Hosted project URL (Cloud Run)
-[ ] Public GitHub repo with open source license visible in About section
-[ ] ~3 minute demo video
-[ ] Arize track selected on Devpost
-[ ] Completed Devpost submission form
-
+- Phoenix Cloud: https://app.phoenix.arize.com
+- Phoenix GitHub: https://github.com/Arize-ai/phoenix
+- Phoenix MCP docs: https://arize.com/docs/phoenix/integrations/phoenix-mcp-server
