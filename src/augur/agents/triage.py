@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from uuid import UUID
 
 from google.adk.agents import Agent
 from google.adk.models import Gemini
@@ -17,6 +18,7 @@ from google.genai import Client
 
 from augur.data.enums import Disposition, Tactic
 from augur.data.schema import Alert, TriageOutput
+from augur.tracing import trace_span
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +122,21 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
 
     data = json.loads(raw_text)
 
+    # Inject OpenInference attributes so Phoenix captures the prediction
+    with trace_span(
+        "augur.triage_agent",
+        **{
+            "openinference.span.kind": "AGENT",
+            "augur.disposition": data.get("disposition"),
+            "augur.attack_tactic": data.get("attack_tactic"),
+            "augur.attack_technique": data.get("attack_technique"),
+            "augur.confidence": data.get("confidence", 0.5),
+            "augur.severity": data.get("severity"),
+            "augur.alert_id": str(alert.alert_id),
+        },
+    ) as span:
+        trace_id = getattr(span, "trace_id", "")
+
     output = TriageOutput(
         alert_id=alert.alert_id,
         disposition=Disposition(data["disposition"]),
@@ -130,7 +147,7 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
         severity=data["severity"],
         recommended_action=data.get("recommended_action", ""),
         reasoning=data.get("reasoning", ""),
-        trace_id="",
+        trace_id=trace_id,
     )
     return output
 
