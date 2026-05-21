@@ -11,10 +11,81 @@ inherit the disable flag.
 
 import logging
 import os
+from contextlib import contextmanager
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _initialized = False
+_tracer: Any = None  # cached tracer after init
+
+
+def _get_tracer() -> Any:
+    """Return the OTel tracer if tracing is initialised, else None."""
+    global _tracer
+    if _tracer is not None:
+        return _tracer
+    try:
+        from opentelemetry import trace as otel_trace
+        _tracer = otel_trace.get_tracer("augur.triage")
+        return _tracer
+    except ImportError:
+        return None
+
+
+class _NoOpSpan:
+    """Context-manager compatible when tracing is disabled."""
+
+    trace_id = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    def set_attribute(self, *a, **k):
+        pass
+
+    def is_recording(self):
+        return False
+
+
+@contextmanager
+def trace_span(span_name: str, **attributes: Any) -> Any:
+    """Create a manual OpenTelemetry span with OpenInference attributes.
+
+    Use inside ``run_triage`` (and any other non-ADK call site) so Phoenix
+    Cloud still sees structured telemetry even when the direct Vertex API is
+    used instead of the ADK runner.
+
+    Yields a span that carries ``.trace_id`` as a hex string so callers can
+    inject it into TriageOutput.
+    """
+    if os.environ.get("AUGUR_TRACING_DISABLED") == "1" or not _initialized:
+        yield _NoOpSpan()
+        return
+
+    tracer = _get_tracer()
+    if tracer is None:
+        yield _NoOpSpan()
+        return
+
+    from opentelemetry import trace as otel_trace
+
+    span = tracer.start_span(span_name, kind=otel_trace.SpanKind.INTERNAL)
+    try:
+        for k, v in attributes.items():
+            # OpenInference uses string keys; numeric for booleans / numbers
+            if isinstance(v, (bool, int, float)):
+                span.set_attribute(str(k), v)
+            else:
+                span.set_attribute(str(k), str(v))
+        # Expose trace_id so callers can inject it into responses
+        span.trace_id = format(span.get_span_context().trace_id, "032x")
+        yield span
+    finally:
+        span.end()
 
 
 def init_tracing(project_name: str = "augur") -> None:
