@@ -33,6 +33,7 @@ _PHOENIX_ATTR_KEYS = {
     "technique": ["attack_technique", "augur.attack_technique"],
     "confidence": ["confidence", "augur.confidence"],
     "severity": ["severity", "augur.severity"],
+    "alert_id": ["alert_id", "augur.alert_id"],
 }
 
 
