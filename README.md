@@ -73,7 +73,7 @@ cd Augur
 # uv handles virtual env + editable install automatically
 uv sync
 
-# Run the test suite (33 tests, ~5s)
+# Run the test suite (143 tests, ~5s)
 uv run pytest -q
 
 # Start the API locally
@@ -88,6 +88,28 @@ uv run uvicorn augur.main:app --host 0.0.0.0 --port 8080
 | `/` | `GET` | Service info |
 | `/triage` | `POST` | Classify a single `Alert` → `TriageOutput` |
 | `/batch` | `POST` | Generate alerts, triage, eval, optionally improve |
+| `/ingest` | `POST` | Pub/Sub push receiver — triages one alert, persists to Firestore |
+| `/eval/trigger` | `POST` | Cloud Scheduler endpoint — runs eval on accumulated triages |
+
+### Pub/Sub Ingestion (Event-Driven Path)
+
+Instead of the self-contained `/batch` loop, Augur supports event-driven ingestion
+via Cloud Pub/Sub:
+
+1. External sources publish Alert JSON to the `alert-ingest` Pub/Sub topic
+2. Push subscription delivers messages to `POST /ingest`
+3. Augur triages the alert, ACKs the message, writes result to Firestore `triage_results`
+4. Cloud Scheduler triggers `POST /eval/trigger` every 5 minutes on accumulated triages
+
+**Mock feeder** (publishes one synthetic alert every 5-10 seconds):
+
+```bash
+# Local
+uv run python -m augur.feeder --topic alert-ingest --project augur-495810 --count 50
+
+# Cloud Run Job (infinite loop)
+gcloud run jobs execute augur-feeder --region us-central1
+```
 
 ### `/batch` MCP Toggle
 
@@ -128,6 +150,10 @@ Response example:
 | `src/augur/phoenix_mcp_client.py` | Async context manager wrapping `@arizeai/phoenix-mcp` stdio server |
 | `src/augur/eval_phoenix.py` | MCP-based eval: pulls traces from Phoenix, computes per-tactic precision/recall |
 | `src/augur/improvement_phoenix.py` | MCP-based improvement: pulls failed trace content from Phoenix, rewrites prompt |
+| `src/augur/ingest.py` | Pub/Sub push handler: decode envelope → triage → persist to Firestore |
+| `src/augur/eval_trigger.py` | Scheduled eval: collect pending triages → eval → improve |
+| `src/augur/feeder.py` | Mock alert feeder for Pub/Sub (Cloud Run Job) |
+| `src/augur/persistence.py` | Shared Firestore persistence helpers |
 | `src/augur/data/mitre_mapping.py` | CICIDS attack label → Augur tactic/technique/disposition mapping |
 | `src/augur/data/cicids_loader.py` | `load_cicids_csv(path)` → `list[tuple[Alert, GroundTruth]]` |
 | `src/augur/data/splits.py` | Tactic-stratified train/dev/test split |
@@ -136,8 +162,6 @@ Response example:
 ---
 
 ## Build Order
-
-Current branch: `implement-mcp-tests` (ahead of `main`)
 
 | # | Status | Task |
 |---|---|---|
@@ -150,8 +174,10 @@ Current branch: `implement-mcp-tests` (ahead of `main`)
 | 7 | ✅ | Eval agent wired to Phoenix MCP |
 | 8 | ✅ | Improvement agent with prompt rewrite logic + MCP |
 | 9 | ✅ | Wire MCP eval + improvement into `/batch` endpoint |
-| 10 | ⬜ | Deploy to Cloud Run (`implement-mcp-tests` branch) |
-| 11 | ⬜ | Record demo video |
+| 9b | ✅ | Cloud Pub/Sub push ingestion + scheduled eval + mock feeder |
+| 10 | ✅ | Dashboard (Streamlit, 4-panel, cyan/black/purple theme) |
+| 11 | ⬜ | Deploy to Cloud Run |
+| 12 | ⬜ | Record demo video + Devpost submission |
 
 ---
 
@@ -190,7 +216,7 @@ gcloud run deploy augur-runtime \
   --port=8080
 ```
 
-### 4. Deploy dashboard (optional)
+### 4. Deploy dashboard
 
 ```bash
 gcloud run deploy augur-dashboard \
@@ -201,6 +227,46 @@ gcloud run deploy augur-dashboard \
   --allow-unauthenticated \
   --max-instances=1 \
   --memory=512Mi
+```
+
+### 5. Set up Pub/Sub ingestion (event-driven path)
+
+```bash
+# Create topic
+gcloud pubsub topics create alert-ingest --project=augur-495810
+
+# Get the runtime URL
+AUGUR_URL=$(gcloud run services describe augur-runtime \
+  --region us-central1 --format='value(status.url)')
+
+# Create push subscription
+gcloud pubsub subscriptions create alert-ingest-push \
+  --topic=alert-ingest \
+  --push-endpoint="${AUGUR_URL}/ingest" \
+  --ack-deadline=60 \
+  --push-auth-service-account=augur-pubsub-invoker@augur-495810.iam.gserviceaccount.com
+
+# Create Cloud Scheduler job for periodic eval
+gcloud scheduler jobs create http eval-trigger \
+  --location=us-central1 \
+  --schedule="*/5 * * * *" \
+  --uri="${AUGUR_URL}/eval/trigger" \
+  --http-method=POST \
+  --headers="Content-Type=application/json" \
+  --message-body='{"use_phoenix_mcp": false, "min_pending": 5, "improve": true}' \
+  --oidc-service-account-email=augur-scheduler@augur-495810.iam.gserviceaccount.com
+```
+
+### 6. Deploy mock feeder (Cloud Run Job)
+
+```bash
+gcloud run jobs create augur-feeder \
+  --image=us-central1-docker.pkg.dev/augur-495810/augur/feeder:latest \
+  --region=us-central1 \
+  --args="--topic=alert-ingest,--project=augur-495810,--count=0"
+
+# Start the feeder
+gcloud run jobs execute augur-feeder --region us-central1
 ```
 
 ---
