@@ -94,6 +94,7 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
     Returns a validated TriageOutput. The caller is responsible for injecting
     trace_id from the current Phoenix span.
     """
+    prompt = agent.instruction or _PROMPT_TEXT
     alert_json = alert.model_dump_json()
 
     client = Client(
@@ -111,7 +112,7 @@ async def run_triage(agent: Agent, alert: Alert) -> TriageOutput:
         model="gemini-2.5-flash",
         contents=Content(
             role="user",
-            parts=[Part(text=f"{_PROMPT_TEXT}\n\nAlert JSON:\n{alert_json}")],
+            parts=[Part(text=f"{prompt}\n\nAlert JSON:\n{alert_json}")],
         ),
         config=config,
     )

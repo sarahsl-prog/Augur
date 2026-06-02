@@ -79,26 +79,38 @@ class PromptStore:
         parent_version: int | None = None,
         triggering_eval_id: str | None = None,
     ) -> int:
-        """Write a new prompt version and bump current_version atomically."""
-        doc_ref = self._doc_ref(tactic)
-        current = self.get_current_version(tactic)
-        new_version = current + 1
+        """Write a new prompt version and bump current_version atomically.
 
-        batch = self.db.batch()
-        batch.update(doc_ref, {
-            "current_version": new_version,
-            "updated_at": firestore.SERVER_TIMESTAMP,
-            "tactic": tactic.value if isinstance(tactic, Tactic) else tactic,
-        })
-        version_ref = doc_ref.collection("versions").document(str(new_version))
-        batch.set(version_ref, {
-            "system_prompt": system_prompt,
-            "created_at": firestore.SERVER_TIMESTAMP,
-            "created_by": created_by,
-            "parent_version": parent_version,
-            "triggering_eval_id": triggering_eval_id,
-        })
-        batch.commit()
+        Uses a Firestore transaction to prevent concurrent writes from
+        producing duplicate version numbers.
+        """
+        doc_ref = self._doc_ref(tactic)
+        tactic_value = tactic.value if isinstance(tactic, Tactic) else tactic
+
+        @firestore.transactional
+        def _bump(transaction):
+            snap = doc_ref.get(transaction=transaction)
+            current = snap.to_dict().get("current_version", 0) if snap.exists else 0
+            new_version = current + 1
+
+            transaction.set(doc_ref, {
+                "current_version": new_version,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+                "tactic": tactic_value,
+            }, merge=True)
+
+            version_ref = doc_ref.collection("versions").document(str(new_version))
+            transaction.set(version_ref, {
+                "system_prompt": system_prompt,
+                "created_at": firestore.SERVER_TIMESTAMP,
+                "created_by": created_by,
+                "parent_version": parent_version,
+                "triggering_eval_id": triggering_eval_id,
+            })
+            return new_version
+
+        transaction = self.db.transaction()
+        new_version = _bump(transaction)
         logger.info("Wrote prompt v%d for tactic %s", new_version, tactic)
         return new_version
 

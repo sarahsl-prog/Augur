@@ -37,52 +37,62 @@ def run_eval(
     eval_run_id: str = "",
 ) -> EvalResult:
     """Compare predictions vs ground truth, compute per-tactic F1, flag worst."""
-    # Pair by alert_id
     gt_by_id = {gt.alert_id: gt for gt in ground_truths}
 
     per_tactic: dict[str, TacticMetrics] = {}
     failures_by_tactic: dict[str, list[str]] = {}
+
+    # Track predicted-tactic counts for precision denominator
+    predicted_tactic_total: dict[str, int] = {}
+    predicted_tactic_correct: dict[str, int] = {}
 
     for pred in predictions:
         gt = gt_by_id.get(pred.alert_id)
         if gt is None:
             continue
 
-        tactic_key = gt.attack_tactic.value if gt.attack_tactic else "None"
-        metrics = per_tactic.setdefault(tactic_key, TacticMetrics())
+        gt_tactic_key = gt.attack_tactic.value if gt.attack_tactic else "None"
+        pred_tactic_key = pred.attack_tactic.value if pred.attack_tactic else "None"
+        metrics = per_tactic.setdefault(gt_tactic_key, TacticMetrics())
         metrics.n_total += 1
 
-        # "Correct" = disposition AND tactic match
         disposition_match = pred.disposition == gt.disposition
         tactic_match = (
             (pred.attack_tactic == gt.attack_tactic)
             if gt.attack_tactic is not None
             else pred.attack_tactic is None
         )
-        if disposition_match and tactic_match:
-            metrics.n_correct += 1
-        else:
-            failures_by_tactic.setdefault(tactic_key, []).append(str(pred.alert_id))
+        correct = disposition_match and tactic_match
 
-    # Fill failure lists
+        predicted_tactic_total[pred_tactic_key] = (
+            predicted_tactic_total.get(pred_tactic_key, 0) + 1
+        )
+
+        if correct:
+            metrics.n_correct += 1
+            predicted_tactic_correct[pred_tactic_key] = (
+                predicted_tactic_correct.get(pred_tactic_key, 0) + 1
+            )
+        else:
+            failures_by_tactic.setdefault(gt_tactic_key, []).append(str(pred.alert_id))
+
     for tactic_key, fail_ids in failures_by_tactic.items():
         per_tactic[tactic_key].failure_trace_ids = fail_ids
 
-    # Compute F1 (treating "correct" as positive class, rest as negative)
-    for metrics in per_tactic.values():
+    for tactic_key, metrics in per_tactic.items():
         tp = metrics.n_correct
-        fp = metrics.n_total - metrics.n_correct
-        # For recall, we need total relevant items. Since we only have items for this tactic,
-        # we assume all items in the batch that belong to this tactic are relevant.
-        # For precision: tp / (tp + fp) = tp / total
-        # For recall: tp / total = same (since we only evaluate items where GT tactic = this tactic)
-        # So precision = recall = accuracy in this context
-        metrics.precision = tp / metrics.n_total if metrics.n_total else 0.0
+        # Recall: of all alerts truly in this tactic, how many did we get right?
         metrics.recall = tp / metrics.n_total if metrics.n_total else 0.0
+        # Precision: of all alerts we *predicted* as this tactic, how many were right?
+        pred_total = predicted_tactic_total.get(tactic_key, 0)
+        pred_correct = predicted_tactic_correct.get(tactic_key, 0)
+        metrics.precision = pred_correct / pred_total if pred_total else 0.0
         if metrics.precision + metrics.recall > 0:
-            metrics.f1 = 2 * metrics.precision * metrics.recall / (metrics.precision + metrics.recall)
+            metrics.f1 = (
+                2 * metrics.precision * metrics.recall
+                / (metrics.precision + metrics.recall)
+            )
 
-    # Flag the lowest-F1 tactic with >= 5 samples and F1 < 0.6
     flagged: Tactic | None = None
     lowest_f1 = float("inf")
     for tactic_key, metrics in per_tactic.items():
