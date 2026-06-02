@@ -48,11 +48,11 @@ class TestPubSubEnvelopeDeserialization:
 class TestHandleIngest:
     @pytest.mark.asyncio
     @patch("augur.ingest._persist_triage")
-    @patch("augur.ingest._get_agent")
+    @patch("augur.ingest.build_triage_agent")
     @patch("augur.ingest.run_triage", new_callable=AsyncMock)
-    async def test_successful_ingest(self, mock_triage, mock_agent, mock_persist):
-        alert = generate_alert_batch(n=1)[0][0]
-        gt = generate_alert_batch(n=1)[1][0]
+    async def test_successful_ingest(self, mock_triage, mock_build, mock_persist):
+        alerts, gts = generate_alert_batch(n=1)
+        alert, gt = alerts[0], gts[0]
 
         mock_triage.return_value = TriageOutput(
             alert_id=alert.alert_id,
@@ -78,9 +78,9 @@ class TestHandleIngest:
 
     @pytest.mark.asyncio
     @patch("augur.ingest._persist_triage")
-    @patch("augur.ingest._get_agent")
+    @patch("augur.ingest.build_triage_agent")
     @patch("augur.ingest.run_triage", new_callable=AsyncMock)
-    async def test_ingest_without_ground_truth(self, mock_triage, mock_agent, mock_persist):
+    async def test_ingest_without_ground_truth(self, mock_triage, mock_build, mock_persist):
         alert = generate_alert_batch(n=1)[0][0]
 
         mock_triage.return_value = TriageOutput(

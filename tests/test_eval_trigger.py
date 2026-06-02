@@ -63,9 +63,12 @@ class TestEvalTrigger:
 
     @pytest.mark.asyncio
     @patch("augur.eval_trigger._persist_eval")
+    @patch("augur.eval_trigger._claim_pending_docs")
     @patch("augur.eval_trigger.run_eval")
     @patch("augur.eval_trigger._get_firestore")
-    async def test_runs_eval_when_enough_pending(self, mock_get_fs, mock_eval, mock_persist):
+    async def test_runs_eval_when_enough_pending(
+        self, mock_get_fs, mock_eval, mock_claim, mock_persist
+    ):
         docs = [_make_triage_doc() for _ in range(10)]
         mock_db = MagicMock()
         mock_query = MagicMock()
@@ -74,6 +77,7 @@ class TestEvalTrigger:
             mock_query
         )
         mock_get_fs.return_value = mock_db
+        mock_claim.return_value = [d.id for d in docs]
 
         mock_eval.return_value = EvalResult(
             eval_run_id="eval-trigger-1",
@@ -92,11 +96,12 @@ class TestEvalTrigger:
 
     @pytest.mark.asyncio
     @patch("augur.eval_trigger._persist_eval")
+    @patch("augur.eval_trigger._claim_pending_docs")
     @patch("augur.eval_trigger.run_improvement", new_callable=AsyncMock)
     @patch("augur.eval_trigger.run_eval")
     @patch("augur.eval_trigger._get_firestore")
     async def test_triggers_improvement_on_flagged_tactic(
-        self, mock_get_fs, mock_eval, mock_improve, mock_persist
+        self, mock_get_fs, mock_eval, mock_improve, mock_claim, mock_persist
     ):
         known_ids = [str(uuid4()) for _ in range(10)]
         docs = [_make_triage_doc(alert_id=aid) for aid in known_ids]
@@ -107,6 +112,7 @@ class TestEvalTrigger:
             mock_query
         )
         mock_get_fs.return_value = mock_db
+        mock_claim.return_value = [d.id for d in docs]
 
         mock_eval.return_value = EvalResult(
             eval_run_id="eval-trigger-2",

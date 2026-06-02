@@ -16,11 +16,11 @@ client = TestClient(app)
 
 class TestIngestEndpoint:
     @patch("augur.ingest._persist_triage")
-    @patch("augur.ingest._get_agent")
+    @patch("augur.ingest.build_triage_agent")
     @patch("augur.ingest.run_triage", new_callable=AsyncMock)
-    def test_returns_200_on_valid_pubsub_message(self, mock_triage, mock_agent, mock_persist):
-        alert = generate_alert_batch(n=1)[0][0]
-        gt = generate_alert_batch(n=1)[1][0]
+    def test_returns_200_on_valid_pubsub_message(self, mock_triage, mock_build, mock_persist):
+        alerts, gts = generate_alert_batch(n=1)
+        alert, gt = alerts[0], gts[0]
 
         mock_triage.return_value = TriageOutput(
             alert_id=alert.alert_id,

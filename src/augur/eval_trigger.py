@@ -43,6 +43,28 @@ def _get_firestore(project: str = "augur-495810") -> firestore.Client:
     return firestore.Client(project=project)
 
 
+def _claim_pending_docs(db, doc_ids: list[str], batch_id: str) -> list[str]:
+    """Atomically claim triage docs for an eval batch via a Firestore transaction.
+
+    Returns the subset of doc_ids that were successfully claimed (i.e. still had
+    eval_batch_id == None at read time).  This prevents two overlapping Scheduler
+    invocations from double-evaluating the same documents.
+    """
+
+    @firestore.transactional
+    def _txn(transaction):
+        claimed = []
+        for doc_id in doc_ids:
+            ref = db.collection("triage_results").document(doc_id)
+            snap = ref.get(transaction=transaction)
+            if snap.exists and snap.to_dict().get("eval_batch_id") is None:
+                transaction.update(ref, {"eval_batch_id": batch_id})
+                claimed.append(doc_id)
+        return claimed
+
+    return _txn(db.transaction())
+
+
 async def trigger_eval(req: EvalTriggerRequest) -> EvalTriggerResponse:
     """Collect un-evaluated triages from Firestore, run eval, optionally improve."""
     db = _get_firestore()
@@ -71,14 +93,12 @@ async def trigger_eval(req: EvalTriggerRequest) -> EvalTriggerResponse:
         if data.get("ground_truth"):
             ground_truths.append(GroundTruth.model_validate(data["ground_truth"]))
 
-    # Claim docs so they aren't double-evaluated
-    batch = db.batch()
-    for doc_id in doc_ids:
-        batch.update(
-            db.collection("triage_results").document(doc_id),
-            {"eval_batch_id": batch_id},
-        )
-    batch.commit()
+    claimed_ids = _claim_pending_docs(db, doc_ids, batch_id)
+
+    if len(claimed_ids) < req.min_pending:
+        return EvalTriggerResponse(status="skipped", pending_count=len(claimed_ids))
+
+    doc_ids = claimed_ids
 
     if req.use_phoenix_mcp:
         eval_result = await run_eval_phoenix(

@@ -6,9 +6,9 @@ and persists the result to Firestore ``triage_results``.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
-from datetime import datetime, timezone
 from uuid import uuid4
 
 from google.cloud import firestore
@@ -44,16 +44,7 @@ class IngestPayload(BaseModel):
     ground_truth: GroundTruth | None = None
 
 
-# ── Lazy singletons ──────────────────────────────────────────────────
-
-_agent = None
-
-
-def _get_agent():
-    global _agent
-    if _agent is None:
-        _agent = build_triage_agent()
-    return _agent
+# ── Helpers ───────────────────────────────────────────────────────────
 
 
 def _get_firestore(project: str = "augur-495810") -> firestore.Client:
@@ -71,10 +62,14 @@ async def handle_ingest(envelope: PubSubEnvelope) -> dict:
     raw = base64.b64decode(envelope.message.data).decode("utf-8")
     payload = IngestPayload.model_validate_json(raw)
 
-    agent = _get_agent()
+    # Rebuild the agent each time so it picks up prompt updates from the
+    # improvement agent (build_triage_agent reads current prompt from Firestore).
+    agent = build_triage_agent()
     triage_output: TriageOutput = await run_triage(agent, payload.alert)
 
-    _persist_triage(payload, triage_output)
+    # Offload synchronous Firestore write to a thread so we don't block the
+    # event loop while Pub/Sub push is waiting for our 200 ACK.
+    await asyncio.to_thread(_persist_triage, payload, triage_output)
 
     return {
         "alert_id": str(payload.alert.alert_id),
