@@ -11,10 +11,11 @@ from augur.main import app
 client = TestClient(app)
 
 
+@patch("augur.main._persist_eval")
 @patch("augur.main.run_improvement_phoenix", new_callable=AsyncMock)
 @patch("augur.main.run_eval_phoenix", new_callable=AsyncMock)
 @patch("augur.main.run_triage", new_callable=AsyncMock)
-def test_batch_with_phoenix_mcp(mock_triage, mock_eval_phoenix, mock_improvement_phoenix):
+def test_batch_with_phoenix_mcp(mock_triage, mock_eval_phoenix, mock_improvement_phoenix, _mock_persist):
     """When use_phoenix_mcp=True, /batch calls MCP eval + improvement."""
     from uuid import uuid4
     from augur.data.schema import TriageOutput, Severity
@@ -72,9 +73,10 @@ def test_batch_with_phoenix_mcp(mock_triage, mock_eval_phoenix, mock_improvement
     assert improve_kwargs.get("failed_trace_ids") == ["trace-mcp-2", "trace-mcp-3"]
 
 
+@patch("augur.main._persist_eval")
 @patch("augur.main.run_eval_phoenix", new_callable=AsyncMock)
 @patch("augur.main.run_triage", new_callable=AsyncMock)
-def test_batch_phoenix_mcp_no_improve(mock_triage, mock_eval_phoenix):
+def test_batch_phoenix_mcp_no_improve(mock_triage, mock_eval_phoenix, _mock_persist):
     """When improve=False, MCP eval runs but improvement is skipped."""
     from uuid import uuid4
     from augur.data.schema import TriageOutput, Severity

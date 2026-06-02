@@ -138,6 +138,9 @@ async def run_eval_phoenix(
     failures_by_tactic: dict[str, list[str]] = {}
     trace_ids: list[str] = []
 
+    predicted_tactic_total: dict[str, int] = {}
+    predicted_tactic_correct: dict[str, int] = {}
+
     for trace in traces:
         trace_ids.append(trace.trace_id)
         parsed = _extract_from_trace(trace)
@@ -150,12 +153,8 @@ async def run_eval_phoenix(
 
         gt = gt_by_id.get(alert_id)
         if gt is None:
-            # A trace without corresponding GT in this batch — skip because
-            # we have no label to score against.  (May happen for stale traces
-            # that pre-date the current batch.)
             continue
 
-        # Normalise parsed fields to our enums
         pred_disposition: Disposition | None = None
         try:
             pred_disposition = Disposition(parsed.get("disposition", ""))
@@ -168,8 +167,9 @@ async def run_eval_phoenix(
         except ValueError:
             pass
 
-        tactic_key = gt.attack_tactic.value if gt.attack_tactic else "None"
-        metrics = per_tactic.setdefault(tactic_key, TacticMetrics())
+        gt_tactic_key = gt.attack_tactic.value if gt.attack_tactic else "None"
+        pred_tactic_key = pred_tactic.value if pred_tactic else "None"
+        metrics = per_tactic.setdefault(gt_tactic_key, TacticMetrics())
         metrics.n_total += 1
 
         disposition_match = pred_disposition == gt.disposition
@@ -179,25 +179,34 @@ async def run_eval_phoenix(
             else pred_tactic is None
         )
 
-        if disposition_match and tactic_match:
-            metrics.n_correct += 1
-        else:
-            failures_by_tactic.setdefault(tactic_key, []).append(trace.trace_id)
+        correct = disposition_match and tactic_match
+        predicted_tactic_total[pred_tactic_key] = (
+            predicted_tactic_total.get(pred_tactic_key, 0) + 1
+        )
 
-    # Fill failure lists
+        if correct:
+            metrics.n_correct += 1
+            predicted_tactic_correct[pred_tactic_key] = (
+                predicted_tactic_correct.get(pred_tactic_key, 0) + 1
+            )
+        else:
+            failures_by_tactic.setdefault(gt_tactic_key, []).append(trace.trace_id)
+
     for tactic_key, fail_ids in failures_by_tactic.items():
         per_tactic[tactic_key].failure_trace_ids = fail_ids
 
-    # Compute F1
-    for metrics in per_tactic.values():
+    for tactic_key, metrics in per_tactic.items():
         tp = metrics.n_correct
-        total = metrics.n_total
-        metrics.precision = tp / total if total else 0.0
-        metrics.recall = tp / total if total else 0.0
+        metrics.recall = tp / metrics.n_total if metrics.n_total else 0.0
+        pred_total = predicted_tactic_total.get(tactic_key, 0)
+        pred_correct = predicted_tactic_correct.get(tactic_key, 0)
+        metrics.precision = pred_correct / pred_total if pred_total else 0.0
         if metrics.precision + metrics.recall > 0:
-            metrics.f1 = 2 * metrics.precision * metrics.recall / (metrics.precision + metrics.recall)
+            metrics.f1 = (
+                2 * metrics.precision * metrics.recall
+                / (metrics.precision + metrics.recall)
+            )
 
-    # Flag the lowest-F1 tactic with ≥5 samples and F1 < 0.6
     flagged: Tactic | None = None
     lowest_f1 = float("inf")
     for tactic_key, metrics in per_tactic.items():
