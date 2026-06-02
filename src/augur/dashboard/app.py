@@ -174,10 +174,14 @@ st.markdown(
 # ---------------------------------------------------------------------------
 
 @st.cache_resource
+def _get_cached_db():
+    from google.cloud import firestore as fs
+    return fs.Client(project=DEFAULT_PROJECT)
+
+
 def _get_db():
     try:
-        from google.cloud import firestore as fs
-        return fs.Client(project=DEFAULT_PROJECT)
+        return _get_cached_db()
     except Exception:
         return None
 
