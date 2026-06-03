@@ -11,6 +11,9 @@ the local failed-traces list.
 
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 
 from augur.agents.triage import build_triage_agent, run_triage

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "arize-instrumentation": {
+      "source": "Arize-ai/arize-skills",
+      "sourceType": "github",
+      "skillPath": "skills/arize-instrumentation/SKILL.md",
+      "computedHash": "7f5532445a0e76816a466f0bec1451b1d3cf416919872277aed7c2b0ee114b5e"
+    }
+  }
+}
