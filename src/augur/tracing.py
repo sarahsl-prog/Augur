@@ -100,23 +100,29 @@ def init_tracing(project_name: str = "augur") -> None:
 
     api_key = os.environ.get("PHOENIX_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "PHOENIX_API_KEY env var is required for tracing. "
+        logger.warning(
+            "PHOENIX_API_KEY not set — tracing disabled. "
             "Set it from your Phoenix Cloud account, or set "
-            "AUGUR_TRACING_DISABLED=1 to skip tracing entirely."
+            "AUGUR_TRACING_DISABLED=1 to silence this warning."
         )
+        _initialized = True
+        return
 
     # Imports are inside the function so the module can be imported in
     # disabled-tracing contexts without pulling in the OTel stack.
     from openinference.instrumentation.google_adk import GoogleADKInstrumentor
     from phoenix.otel import register
 
-    tracer_provider = register(
+    tracer_provider = register(project_name=project_name, auto_instrument=True)
+
+
+    ''' tracer_provider = register(
         project_name=project_name,
         endpoint="https://app.phoenix.arize.com/v1/traces",
         headers={"api_key": api_key},
-        auto_instrument=True,
-    )
+        auto_instrument=False,
+    ) '''
+
     GoogleADKInstrumentor().instrument(tracer_provider=tracer_provider)
     _initialized = True
     logger.info("Phoenix tracing initialized (project=%s)", project_name)

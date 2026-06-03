@@ -58,8 +58,8 @@ MCP integration the Arize track judges.
 Create `.env` or export manually:
 
 ```bash
-export PHOENIX_API_KEY="your-phoenix-api-key"          # Required for tracing
-export AUGUR_TRACING_DISABLED="0"                       # Set "1" to skip OTel in tests
+export PHOENIX_API_KEY="your-phoenix-api-key"          # Tracing on by default; omit to disable with a warning
+export AUGUR_TRACING_DISABLED="1"                       # Set "1" to explicitly disable OTel (silences the warning)
 export GOOGLE_CLOUD_PROJECT="augur-495810"
 export GOOGLE_CLOUD_LOCATION="us-central1"
 ```
@@ -101,13 +101,40 @@ via Cloud Pub/Sub:
 3. Augur triages the alert, ACKs the message, writes result to Firestore `triage_results`
 4. Cloud Scheduler triggers `POST /eval/trigger` every 5 minutes on accumulated triages
 
-**Mock feeder** (publishes one synthetic alert every 5-10 seconds):
+**Running the Pub/Sub pipeline locally**
+
+The ingest handler expects Pub/Sub to push HTTP requests, which requires a public URL. For local dev, use a pull-based consumer instead — no ngrok needed.
+
+**One-time setup** (only needed if you haven't created these resources yet):
 
 ```bash
-# Local
-uv run python -m augur.feeder --topic alert-ingest --project augur-495810 --count 50
+# Create the topic
+gcloud pubsub topics create alert-ingest --project=augur-495810
 
-# Cloud Run Job (infinite loop)
+# Create a pull subscription for local dev
+gcloud pubsub subscriptions create alert-ingest-local \
+  --topic=alert-ingest \
+  --project=augur-495810 \
+  --ack-deadline=60
+```
+
+**Terminal 1 — start the consumer** (pulls messages and runs them through `handle_ingest`):
+
+```bash
+uv run python scripts/local_consumer.py
+```
+
+**Terminal 2 — start the feeder** (publishes one synthetic alert every 5–10 seconds):
+
+```bash
+uv run python -m augur.feeder --topic alert-ingest --project augur-495810 --count 50
+```
+
+Drop `--count` or set `--count 0` for an infinite loop. The consumer logs each alert's ID and disposition as it is processed and persisted to Firestore.
+
+**Mock feeder in Cloud Run** (infinite loop):
+
+```bash
 gcloud run jobs execute augur-feeder --region us-central1
 ```
 
@@ -232,7 +259,7 @@ gcloud run deploy augur-dashboard \
 ### 5. Set up Pub/Sub ingestion (event-driven path)
 
 ```bash
-# Create topic
+# Create topic (skip if already created for local dev)
 gcloud pubsub topics create alert-ingest --project=augur-495810
 
 # Get the runtime URL
