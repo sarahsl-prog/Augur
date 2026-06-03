@@ -26,6 +26,19 @@ steps:
       - 'Dockerfile.dashboard'
       - '.'
 
+  # --- Build feeder image (Cloud Run Job) ---
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-feeder'
+    waitFor: ['-']
+    args:
+      - build
+      - '-t'
+      - 'us-central1-docker.pkg.dev/augur-495810/augur/feeder:latest'
+      - '-f'
+      - 'Dockerfile.feeder'
+      - '.'
+
 images:
   - 'us-central1-docker.pkg.dev/augur-495810/augur/runtime:latest'
   - 'us-central1-docker.pkg.dev/augur-495810/augur/dashboard:latest'
+  - 'us-central1-docker.pkg.dev/augur-495810/augur/feeder:latest'

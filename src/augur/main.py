@@ -21,41 +21,11 @@ from augur.eval import run_eval, TacticMetrics as _LegacyTacticMetrics
 from augur.eval_phoenix import run_eval_phoenix, EvalResult as _McpEvalResult
 from augur.improvement import run_improvement
 from augur.improvement_phoenix import run_improvement_phoenix
+from augur.ingest import PubSubEnvelope, handle_ingest
+from augur.eval_trigger import EvalTriggerRequest, EvalTriggerResponse, trigger_eval
+from augur.persistence import persist_eval as _persist_eval
 from augur.prompt_store import PromptStore
 from augur.tracing import init_tracing
-
-from datetime import datetime, timezone
-from google.cloud import firestore
-
-
-def _persist_eval(eval_result, project="augur-495810"):
-    """Write an EvalResult (legacy or MCP-derived) to Firestore eval_results collection."""
-    db = firestore.Client(project=project)
-    doc = db.collection("eval_results").document(eval_result.eval_run_id)
-    per_tactic = {}
-    for k, v in eval_result.per_tactic.items():
-        per_tactic[k] = {
-            "n_total": v.n_total,
-            "n_correct": v.n_correct,
-            "precision": v.precision,
-            "recall": v.recall,
-            "f1": v.f1,
-            "accuracy": v.accuracy,
-            "failure_trace_ids": v.failure_trace_ids,
-        }
-    payload = {
-        "eval_run_id": eval_result.eval_run_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "batch_size": eval_result.batch_size,
-        "per_tactic": per_tactic,
-        "flagged_tactic": eval_result.flagged_tactic.value if eval_result.flagged_tactic else None,
-    }
-    # MCP-derived result carries extra Phoenix metadata
-    if hasattr(eval_result, "trace_count"):
-        payload["trace_count"] = eval_result.trace_count
-    if hasattr(eval_result, "trace_ids"):
-        payload["trace_ids"] = eval_result.trace_ids
-    doc.set(payload)
 
 
 @asynccontextmanager
@@ -93,6 +63,21 @@ async def triage(alert: Alert) -> TriageOutput:
     agent = build_triage_agent()
     result = await run_triage(agent, alert)
     return result
+
+
+@app.post("/ingest")
+async def ingest(envelope: PubSubEnvelope) -> dict:
+    """Receive a Pub/Sub push message containing one alert.
+
+    Returns 200 to ACK the message.  Any 4xx/5xx causes Pub/Sub to retry.
+    """
+    return await handle_ingest(envelope)
+
+
+@app.post("/eval/trigger", response_model=EvalTriggerResponse)
+async def eval_trigger(req: EvalTriggerRequest) -> EvalTriggerResponse:
+    """Triggered by Cloud Scheduler.  Reads un-evaluated triages, runs eval."""
+    return await trigger_eval(req)
 
 
 from pydantic import BaseModel
