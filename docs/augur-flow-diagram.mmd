@@ -1,0 +1,115 @@
+flowchart TB
+    subgraph INPUT["Alert Sources"]
+        CICIDS["CICIDS 2017/2018\n(Real Labeled Data)"]
+        SYNTH["Synthetic Generator\n(data/synthetic.py)"]
+        FEEDER["Mock Feeder\n(Cloud Run Job)"]
+    end
+
+    subgraph INGEST["Ingestion Layer"]
+        PUBSUB["Google Pub/Sub\n(alert-ingest topic)"]
+        BATCH_EP["POST /batch\n(Sync Dev/Demo)"]
+        INGEST_EP["POST /ingest\n(Pub/Sub Push)"]
+    end
+
+    subgraph FIRESTORE_PROMPTS["Firestore – Prompt Store"]
+        PROMPT_V["Per-Tactic Prompts\n(versioned per MITRE tactic)\nv1 → v2 → v3 ..."]
+    end
+
+    subgraph TRIAGE["Triage Agent"]
+        LOAD_PROMPT["Load Current Prompt\nfor Alert's Tactic"]
+        GEMINI_CALL["Vertex Gemini\n(Native JSON Mode)"]
+        TRIAGE_OUT["TriageOutput\ndisposition · tactic · technique\nconfidence · severity · reasoning\ntrace_id"]
+    end
+
+    subgraph TRACING["OpenInference Tracing"]
+        OI["GoogleADKInstrumentor\n+ Manual trace_span()"]
+        PHOENIX["Arize Phoenix Cloud\n(Trace Store)"]
+    end
+
+    subgraph PERSIST["Firestore – Results"]
+        TRIAGE_RES["triage_results\n(alert + output + trace_id)"]
+        EVAL_RES["eval_results\n(per-tactic metrics)"]
+    end
+
+    subgraph EVAL["Eval Agent"]
+        SCHED["Cloud Scheduler\nPOST /eval/trigger\n(every 5 min)"]
+        CLAIM["Claim Un-evaluated\nTriage Results"]
+        MCP_EVAL["Phoenix MCP Server\n(fetch traces + spans)"]
+        METRICS["Compute Per-Tactic\nPrecision / Recall / F1"]
+        FLAG{"Worst Tactic\nF1 < 0.6?"}
+    end
+
+    subgraph IMPROVE["Improvement Agent"]
+        MCP_IMP["Phoenix MCP Server\n(fetch failed trace content)"]
+        META["Build Meta-Prompt\nwith Concrete Failures"]
+        REWRITE["Vertex Gemini\nRewrite Tactic Prompt"]
+        STORE_V["Store New Version\nin Firestore"]
+    end
+
+    subgraph DASH["Streamlit Dashboard"]
+        P1["Alert Feed"]
+        P2["Triage Detail\n+ Phoenix Link"]
+        P3["Per-Tactic\nPerformance Chart"]
+        P4["Improvement\nTimeline"]
+    end
+
+    %% Input flows
+    CICIDS --> BATCH_EP
+    SYNTH --> BATCH_EP
+    SYNTH --> FEEDER
+    FEEDER --> PUBSUB
+    PUBSUB --> INGEST_EP
+
+    %% Triage flow
+    BATCH_EP --> LOAD_PROMPT
+    INGEST_EP --> LOAD_PROMPT
+    PROMPT_V -.->|"read current version"| LOAD_PROMPT
+    LOAD_PROMPT --> GEMINI_CALL
+    GEMINI_CALL --> TRIAGE_OUT
+
+    %% Tracing
+    GEMINI_CALL --> OI
+    OI --> PHOENIX
+
+    %% Persist triage
+    TRIAGE_OUT --> TRIAGE_RES
+
+    %% Eval flow
+    SCHED --> CLAIM
+    CLAIM --> TRIAGE_RES
+    CLAIM --> MCP_EVAL
+    MCP_EVAL --> PHOENIX
+    MCP_EVAL --> METRICS
+    METRICS --> FLAG
+    METRICS --> EVAL_RES
+    FLAG -->|"No"| DONE["Wait for\nNext Cycle"]
+    FLAG -->|"Yes – flagged tactic"| MCP_IMP
+
+    %% Improvement flow
+    MCP_IMP --> PHOENIX
+    MCP_IMP --> META
+    META --> REWRITE
+    REWRITE --> STORE_V
+    STORE_V -->|"write v(n+1)"| PROMPT_V
+
+    %% Dashboard reads
+    TRIAGE_RES -.-> DASH
+    EVAL_RES -.-> DASH
+    PROMPT_V -.-> DASH
+
+    %% Styling
+    classDef inputCls fill:#1a1a2e,stroke:#00bcd4,color:#e0e0e0
+    classDef triageCls fill:#0d2137,stroke:#00e5ff,color:#e0e0e0
+    classDef evalCls fill:#1a0d2e,stroke:#aa00ff,color:#e0e0e0
+    classDef improveCls fill:#2e1a0d,stroke:#ff6d00,color:#e0e0e0
+    classDef traceCls fill:#0d2e1a,stroke:#00e676,color:#e0e0e0
+    classDef storeCls fill:#2e2e0d,stroke:#ffd600,color:#e0e0e0
+    classDef dashCls fill:#1a2e2e,stroke:#26c6da,color:#e0e0e0
+
+    class CICIDS,SYNTH,FEEDER inputCls
+    class LOAD_PROMPT,GEMINI_CALL,TRIAGE_OUT triageCls
+    class SCHED,CLAIM,MCP_EVAL,METRICS,FLAG evalCls
+    class MCP_IMP,META,REWRITE,STORE_V improveCls
+    class OI,PHOENIX traceCls
+    class PROMPT_V,TRIAGE_RES,EVAL_RES storeCls
+    class P1,P2,P3,P4 dashCls
