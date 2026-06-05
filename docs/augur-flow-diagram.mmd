@@ -1,7 +1,7 @@
 flowchart TB
     subgraph INPUT["Alert Sources"]
         CICIDS["CICIDS 2017/2018\n(Real Labeled Data)"]
-        SYNTH["Synthetic Generator\n(data/synthetic.py)"]
+        SYNTH["Synthetic Generator\n(src/augur/data/synthetic.py)"]
         FEEDER["Mock Feeder\n(Cloud Run Job)"]
     end
 
@@ -16,7 +16,7 @@ flowchart TB
     end
 
     subgraph TRIAGE["Triage Agent"]
-        LOAD_PROMPT["Load Current Prompt\nfor Alert's Tactic"]
+        LOAD_PROMPT["Load Current Triage\nPrompt from Firestore"]
         GEMINI_CALL["Vertex Gemini\n(Native JSON Mode)"]
         TRIAGE_OUT["TriageOutput\ndisposition · tactic · technique\nconfidence · severity · reasoning\ntrace_id"]
     end
@@ -36,7 +36,7 @@ flowchart TB
         CLAIM["Claim Un-evaluated\nTriage Results"]
         MCP_EVAL["Phoenix MCP Server\n(fetch traces + spans)"]
         METRICS["Compute Per-Tactic\nPrecision / Recall / F1"]
-        FLAG{"Worst Tactic\nF1 < 0.6?"}
+        FLAG{"Worst Tactic\nn >= 5 and F1 < 0.6?"}
     end
 
     subgraph IMPROVE["Improvement Agent"]
